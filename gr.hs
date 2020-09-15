@@ -55,14 +55,24 @@ class Poset a => DCPO a where
 instance DCPO a => Domain a where
 
 
--- A subset S of a DCPO D is a basis when (B intersect downward-approx x) is
--- a filtered set with supremum x for each x
-newtype Basis = Basis [a]
+-- from the paper Bicontinuous Domains and Some Old
+-- Problems in Domain Theory
+instance DCPO a => ContinuousDCPO a where
+  -- 1. For every b in P, vv b = { a ∈ P | a << b } is directed 
+  -- 2. b = lub (vvb) [lub = least upper bound]
+  
+  
+instance DCPO a => Bicontinuous a where
+  -- has basis ]a, b[ = { x | a << x and x << b }
+  -- has basis [a, b] = { x | a <= x <= b }
+  
 
--- A DCPO is omega continuous if the basis set is countable.
-instance DCPO a => OmegaDCPO a where
 
+data Nat = Succ Nat | Nil
 
+-- | cones are bicontinuous. Any point on a cone is indexed
+-- by two natural numbers
+data Cone a = Cone { coneix :: Nat -> Nat -> a }
 
 data Interval a = Interval { il :: a, ir :: a }
 
