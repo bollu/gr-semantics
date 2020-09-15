@@ -1,3 +1,5 @@
+-- TODO: check out the algebraic data type used for min cut max flow!
+-- feels very similar 
 -- http://www.cs.ox.ac.uk/people/bob.coecke/gr2.pdf
 -- http://www.nearmidnight.com/domains.pdf
 -- http://www.cc.kyoto-su.ac.jp/~yasugi/page/Kakenhi/escardo.pdf
@@ -16,12 +18,12 @@ import GHC.Int
 import Data.Maybe
 import Data.Either
 import GHC.Classes (Eq, (==), ltInt)
-import GHC.Base (remInt, (+#), (-#), (*#))
+import GHC.Base (remInt, (+#), (-#), (*#), maxInt)
 import GHC.Show
 import Data.List
 
 -- | e for endpoint
-class Poset a where
+class Eq a => Poset a where
   (<) :: a -> a -> Maybe Bool
   (>) :: a -> a -> Maybe Bool
   a > b = case (a < b) of Just b -> Just (not b); Nothing -> Nothing
@@ -34,7 +36,6 @@ instance Poset Int where
 
 
 
-
 newtype Div = Div Int deriving(Eq, Show)
 instance Poset Div where
   (Div a) < (Div b) = 
@@ -42,6 +43,14 @@ instance Poset Div where
       (True, _) -> Just True
       (_, True) -> Just False
       (_, _) -> Nothing
+
+-- | tropical integers. ring with (max, +)
+data Tropical = Tropical Int | Infty deriving (Eq, Show)
+instance Poset Tropical where
+  (Tropical a) < Infty = Just True
+  Infty  < (Tropical a) = Just True
+  (Tropical a) < (Tropical b) = a < b
+  _ < _ = Nothing
 
 
 -- | y << x <=> y approximates x
@@ -79,7 +88,7 @@ class Poset a => DCPO a where
 --
 -- That is, if after an infinite process, we are able to dominate y, we can
 -- dominate x in a finite process.
-instance DCPO a => Domain a where
+-- instance DCPO a => Domain a where
 
 
 -- from the paper Bicontinuous Domains and Some Old
@@ -97,7 +106,7 @@ class DCPO a => ContinuousDCPO a where
 
 -- | cones are bicontinuous. Any point on a cone is indexed
 -- by two natural numbers
-data Pt = Pt Float Float
+data Pt = Pt Float Float deriving (Eq, Show)
 
 class Ring a where
   (+) :: a -> a -> a
@@ -105,6 +114,10 @@ class Ring a where
   (*) :: a -> a -> a
   rone :: a
   rzero :: a
+
+sigma :: Ring a => [a] -> a
+sigma [] = rzero
+sigma (a:as) = a + sigma as
 
 instance Ring Int where
   (I# a) + (I# b) = I# (a +# b)
@@ -120,6 +133,19 @@ instance Ring Float where
   rone = 1
   rzero = 0
 
+rnegone :: Ring a => a; rnegone = rzero - rone
+
+
+-- | strictly speaking, only a semiring. Let's see what happens.
+instance Ring Tropical where
+  -- | min, +
+  (Tropical a) + (Tropical b) = Tropical (if gtInt a b then b else a)
+  a + Infty = a
+  Infty + a = a
+
+  (Tropical a) * (Tropical b) = Tropical (a + b)
+  Infty * _ = Infty
+  _ * Infty = Infty
 
 instance (Ring a, Ring b) => Ring (a, b) where
    (a, b) + (a', b') = (a + a', b + b')
@@ -157,6 +183,9 @@ instance Bicontinuous Pt where
 
 data Interval a = Interval { il :: a, ir :: a } | IntervalJoin [Interval a]
 
+instance Eq a => Eq (Interval a) where
+  (Interval a b) == (Interval a' b') = a == a' && b == b'
+
 -- a       b      a' b'
 -- (-------) < (--{--}---): smaller intervals have more information
 instance Poset a => Poset (Interval a) where
@@ -173,6 +202,13 @@ class Poset a => LocallyFinite a where enumerate :: a -> a -> [a]
 
 instance LocallyFinite Int where
   enumerate a b = if a < b == Just True then [a,a+1..b] else []
+
+
+-- ? Not strictly speaking, but given laziness..
+instance LocallyFinite Tropical where
+  enumerate (Tropical a) (Tropical b) = if a < b == Just True then [ Tropical x | x <- [a,a+1..b]] else []
+  enumerate (Tropical a) Infty = [Tropical x | x <- [a,a+1..]]
+  enumerate Infty _ = []
 
 -- | for it to be a legal Interval, we must have that (Interval a b) < (Interval a' b')
 -- | Need to generate all intervals from smaller to larger
@@ -211,28 +247,44 @@ cobind (Interval l r) ia2b =
 -- all [head xs <= x && x <= last xs | x <- xs] = True
 data CI a = CI { unCI :: [a] } deriving(Eq, Show)
 
+-- | if one is a prefix of the other
+-- TODO: this is broken, use the formula to get the relation on max(D) to be
+Definition 17: if a, bin max D, then: a <= b === exists x in D, a = left(x) && b = right(x)
+instance Poset x => Poset (CI x) where 
+  (CI as) < (CI bs) = 
+     if  length as < length bs == Just True && take (length as) bs == as then Just True
+     else if length as > length bs == Just True && take (length bs) as == bs then Just False
+     else Nothing
+
+-- | use comonad to implement enumerate
+-- instance  LocallyFinite a =>  LocallyFinite (CI a) where 
+--   enumerate 
+
 -- monotone maps are functorial for CI
 fmapCI :: (a -> b) -> CI a -> CI b; fmapCI f (CI as) = CI [f a | a <- as]
 returnCI :: a -> CI a; returnCI a = CI [a]
-bindCI :: LocallyFinite a => (CI a) -> (a -> CI b) -> CI b
--- | take the lower set.
-bindCI (CI as) a2cib = CI [head (unCI (a2cib a)) | a <- as]
+
 
 joinCI :: LocallyFinite a => CI (CI a) -> CI a
 joinCI (CI cis) = CI [ head(unCI ci) | ci <- cis]
 
+-- | take the lower set
+bindCI :: LocallyFinite a => (CI a) -> (a -> CI b) -> CI b
+bindCI (CI as) a2cib = CI [head (unCI (a2cib a)) | a <- as]
+
 extractCI :: CI a -> a
 extractCI (CI as) = head as
-
-prefixes :: [a] -> [[a]]
-prefixes [] = [[]]
-prefixes (a:as) = let ss = prefixes as in []:[a:s|s<-ss]
 
 suffixes :: [a] -> [[a]]
 suffixes [a] = [[a]]
 suffixes as = [s ++ [last as] | s <- suffixes (init as)] ++ [[last as]]
 
+duplicateCI :: CI a -> CI (CI a)
 duplicateCI (CI as) = CI [CI s | s <- (suffixes as)]
+
+-- | w a -> (w a -> b) -> w b
+cobindCI :: (CI a) -> (CI a -> b) -> CI b
+cobindCI ci0 f = CI [f ci | ci <- unCI (duplicateCI ci0)]
 
 mkCI :: LocallyFinite  a => a -> a -> CI a
 mkCI l r = CI (enumerate l r)
@@ -250,7 +302,26 @@ instance (Poset a, Poset b) => Poset (a, b) where
         _ -> Nothing
 
 
+-- | split incluslive; so split (CI x y) a = (CI x a) (CI a y)
+split :: LocallyFinite a => CI a -> a -> (CI a, CI a)
+split (CI as) a0 = (CI [a | a <- as, a < a0 == Just True || a == a0], CI [a | a <- as, a < a0 == Just False || a == a0])
 
+splits :: LocallyFinite a => CI a -> [(CI a, CI a)]
+splits ci@(CI as) = [split ci a | a <- as]
+
+-- incidence algebra
+-- | dirichlet convolution
+instance (LocallyFinite a, Ring b) => Ring (CI a -> b) where
+  f * g = \ci -> let mul (l, r) = f l * g r in  sigma ([mul s | s <- splits ci])
+  f + g =  \c -> f c + g c
+  f - g =  \c -> f c - g c
+  rzero = \_ -> rzero
+  rone = \(CI as) -> if length as == 1 then rone else rzero
+
+-- | is this given to be cobind? Can I write this as sum [cobind] ?
+mu :: (LocallyFinite a,  Ring b) => (CI a -> b)
+mu (CI [a]) = rone
+mu total@(CI [a, b]) = rnegone * sigma (unCI (cobindCI total mu))
 
 
 
@@ -284,12 +355,12 @@ class Poset p => GlobalHyperbolic p where
 
 -- | Definition 16 in gr2
 -- | Definition 42 in domains and measurement
--- class IntervalCls p where
+-- class IntervalPoset p where
 --    -- | (1) each value is isomorphic to an interval
---    inject :: p -> Interval p
+--    inject :: p -> Interval p -- | monad
 --    -- | (2) pre-condition: they share the same end point
 --    union :: Interval p -> Interval p -> Interval p
---    enumerate :: Interval p -> [p]
+--    enumerate :: Interval p -> [p] -- | comonad 
 --    -- | comonad
 --    split :: Interval p -> p -> (Interval p, Interval p)
 --    -- | it's compact so we can search
@@ -300,5 +371,4 @@ class Poset p => GlobalHyperbolic p where
 --   union (Interval l1 r1) (Interval l2 r2) = Interval l1 r2
 
 
-
-
+-- Global hyperbolic poset ~= interval domain <- domain!
